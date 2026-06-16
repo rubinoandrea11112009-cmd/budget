@@ -232,7 +232,7 @@
 
   <div class="week-card">
     <div class="week-row">
-      <span class="week-label">Limite settimanale (paghetta)</span>
+      <span class="week-label">Limite settimana (gio–mer, paghetta)</span>
       <span id="week-remaining" style="font-size:13px;font-weight:500;">€15,00 rimanenti</span>
     </div>
     <div class="bar" style="margin-top:10px;"><div class="bar-fill" id="week-bar" style="width:0%;background:#4CAF50;"></div></div>
@@ -333,8 +333,13 @@
   function fmt(n) { return '€' + Math.abs(n).toFixed(2).replace('.', ','); }
 
   function getMonday() {
-    const d = new Date(); const day = d.getDay() || 7;
-    d.setHours(0,0,0,0); d.setDate(d.getDate() - day + 1); return d;
+    // Settimana che inizia il giovedì (4)
+    const d = new Date();
+    d.setHours(0,0,0,0);
+    const day = d.getDay(); // 0=dom, 1=lun, ..., 4=gio, 5=ven, 6=sab
+    const diff = (day + 3) % 7; // quanti giorni fa era giovedì
+    d.setDate(d.getDate() - diff);
+    return d;
   }
 
   function calcTasca(tasca) {
@@ -512,6 +517,67 @@
         icon: ''
       });
     });
+  }
+
+  // ── Service Worker & aggiornamenti PWA ──────────────────────────
+  if ('serviceWorker' in navigator) {
+    // Inietta il SW inline come blob per non richiedere file esterni
+    const swCode = `
+const CACHE = 'budget-v2';
+const ASSETS = ['/'];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(ASSETS))
+  );
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  e.respondWith(
+    fetch(e.request).then(res => {
+      const clone = res.clone();
+      caches.open(CACHE).then(c => c.put(e.request, clone));
+      return res;
+    }).catch(() => caches.match(e.request))
+  );
+});
+
+self.addEventListener('message', e => {
+  if (e.data === 'skipWaiting') self.skipWaiting();
+});
+    `;
+    const swBlob = new Blob([swCode], { type: 'application/javascript' });
+    const swUrl = URL.createObjectURL(swBlob);
+
+    navigator.serviceWorker.register(swUrl).then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const newSW = reg.installing;
+        newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+            // Mostra banner di aggiornamento
+            const banner = document.createElement('div');
+            banner.className = 'notif-banner';
+            banner.style.cssText = 'cursor:pointer;margin-bottom:12px;background:#001a0a;border-color:#4CAF5055;color:#4CAF50;';
+            banner.innerHTML = '<i class="ti ti-refresh"></i> <span>Aggiornamento disponibile — <strong>tocca per aggiornare</strong></span>';
+            banner.onclick = () => { newSW.postMessage('skipWaiting'); location.reload(); };
+            const area = document.getElementById('notif-area');
+            area.insertBefore(banner, area.firstChild);
+          }
+        });
+      });
+    }).catch(() => {});
+
+    // Se il SW prende il controllo, ricarica in background
+    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
   }
 
   checkPushNotifiche();
